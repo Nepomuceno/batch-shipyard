@@ -97,6 +97,28 @@ _NVIDIA_DRIVER = {
         '/licence.php?lang=us'
     ),
 }
+_PROMETHEUS = {
+    'node_exporter': {
+        'url': (
+            'https://github.com/prometheus/node_exporter/releases/download/v'
+            '0.15.2/node_exporter-0.15.2.linux-amd64.tar.gz'
+        ),
+        'sha256': (
+            '1ce667467e442d1f7fbfa7de29a8ffc3a7a0c84d24d7c695cc88b29e0752df37'
+        ),
+        'target': 'node_exporter.tar.gz'
+    },
+    'cadvisor': {
+        'url': (
+            'https://github.com/google/cadvisor/releases/download/v'
+            '0.27.4/cadvisor'
+        ),
+        'sha256': (
+            '378df92f532166251fa3f116beea26ca6364e45e3d6a63ea78b7627ea54bd303'
+        ),
+        'target': 'cadvisor'
+    },
+}
 _CASCADE_FILE = (
     'cascade.py',
     pathlib.Path(_ROOT_PATH, 'cascade/cascade.py')
@@ -255,10 +277,28 @@ def fetch_storage_account_keys_from_aad(
         populate_global_settings(config, fs_storage)
 
 
-def _setup_nvidia_driver_package(blob_client, config, vm_size):
-    # type: (azure.storage.blob.BlockBlobService, dict, str) -> pathlib.Path
+def _download_file(desc, pkg, dldict):
+    # type: (str, pathlib.Path, dict) -> None
+    """Download a file and check sha256
+    :param str desc: description
+    :param pathlib.Path pkg: package
+    :param dict dldict: download dict
+    """
+    logger.debug('downloading {} to {}'.format(desc, dldict['target']))
+    response = requests.get(dldict['url'], stream=True)
+    with pkg.open('wb') as f:
+        for chunk in response.iter_content(chunk_size=_REQUEST_CHUNK_SIZE):
+            if chunk:
+                f.write(chunk)
+    logger.debug('wrote {} bytes to {}'.format(pkg.stat().st_size, pkg))
+    # check sha256
+    if util.compute_sha256_for_file(pkg, False) != dldict['sha256']:
+        raise RuntimeError('sha256 mismatch for {}'.format(pkg))
+
+
+def _setup_nvidia_driver_package(config, vm_size):
+    # type: (dict, str) -> pathlib.Path
     """Set up the nvidia driver package
-    :param azure.storage.blob.BlockBlobService blob_client: blob client
     :param dict config: configuration dict
     :param str vm_size: vm size
     :rtype: pathlib.Path
@@ -282,19 +322,32 @@ def _setup_nvidia_driver_package(blob_client, config, vm_size):
         else:
             logger.info('NVIDIA Software License accepted')
         # download driver
-        logger.debug('downloading NVIDIA driver to {}'.format(
-            _NVIDIA_DRIVER[gpu_type]['target']))
-        response = requests.get(_NVIDIA_DRIVER[gpu_type]['url'], stream=True)
-        with pkg.open('wb') as f:
-            for chunk in response.iter_content(chunk_size=_REQUEST_CHUNK_SIZE):
-                if chunk:
-                    f.write(chunk)
-        logger.debug('wrote {} bytes to {}'.format(pkg.stat().st_size, pkg))
-        # check sha256
-        if (util.compute_sha256_for_file(pkg, False) !=
-                _NVIDIA_DRIVER[gpu_type]['sha256']):
-            raise RuntimeError('sha256 mismatch for {}'.format(pkg))
+        _download_file('NVIDIA driver', pkg, _NVIDIA_DRIVER[gpu_type])
     return pkg
+
+
+def _setup_prometheus_monitoring_tools(pool_settings):
+    # type: settings.PoolSettings -> Tuple[pathlib.Path, pathlib.Path]
+    """Setup the prometheus monitoring tools
+    :param settings.PoolSettings pool_settings: pool settings
+    :rtype: tuple
+    :return: tuple of ne_pkg, ca_pkg
+    """
+    ne_pkg = _RESOURCES_PATH / _PROMETHEUS['node_exporter']['target']
+    ca_pkg = _RESOURCES_PATH / _PROMETHEUS['cadvisor']['target']
+    if pool_settings.prometheus.ne_enabled:
+        if (not ne_pkg.exists() or
+                util.compute_sha256_for_file(ne_pkg, False) !=
+                _PROMETHEUS['node_exporter']['sha256']):
+            _download_file(
+                'Prometheus Node Exporter', ne_pkg,
+                _PROMETHEUS['node_exporter'])
+    if pool_settings.prometheus.ca_enabled:
+        if (not ca_pkg.exists() or
+                util.compute_sha256_for_file(ca_pkg, False) !=
+                _PROMETHEUS['cadvisor']['sha256']):
+            _download_file('cAdvisor', ca_pkg, _PROMETHEUS['cadvisor'])
+    return ne_pkg, ca_pkg
 
 
 def _generate_azure_mount_script_name(
@@ -1062,7 +1115,7 @@ def _construct_pool_object(
             util.is_none_or_empty(custom_image_na)):
         if pool_settings.gpu_driver is None:
             gpu_driver = _setup_nvidia_driver_package(
-                blob_client, config, pool_settings.vm_size)
+                config, pool_settings.vm_size)
             _rflist.append((gpu_driver.name, gpu_driver))
         else:
             gpu_type = settings.get_gpu_type_from_vm_size(
@@ -1073,6 +1126,15 @@ def _construct_pool_object(
             gpu_driver.name)
     else:
         gpu_env = None
+    # prometheus settings
+    if (not is_windows and
+            (pool_settings.prometheus.ne_enabled or
+             pool_settings.prometheus.ca_enabled)):
+        ne_pkg, ca_pkg = _setup_prometheus_monitoring_tools(pool_settings)
+        if pool_settings.prometheus.ne_enabled:
+            _rflist.append((ne_pkg.name, ne_pkg))
+        if pool_settings.prometheus.ca_enabled:
+            _rflist.append((ca_pkg.name, ca_pkg))
     # get container registries
     docker_registries = settings.docker_registries(config)
     # set additional start task commands (pre version)
@@ -1370,8 +1432,9 @@ def _construct_pool_object(
                 block_for_gr,
             )
         )
-    # singularity env vars
+    # Linux-only settings
     if not is_windows:
+        # singularity env vars
         pool.start_task.environment_settings.append(
             batchmodels.EnvironmentSetting(
                 'SINGULARITY_TMPDIR',
@@ -1384,6 +1447,35 @@ def _construct_pool_object(
                 settings.get_singularity_cachedir(config)
             )
         )
+        # prometheus env vars
+        if pool_settings.prometheus.ne_enabled:
+            pool.start_task.environment_settings.append(
+                batchmodels.EnvironmentSetting(
+                    'PROM_NODE_EXPORTER_PORT',
+                    pool_settings.prometheus.ne_port
+                )
+            )
+            if util.is_not_empty(pool_settings.prometheus.ne_options):
+                pool.start_task.environment_settings.append(
+                    batchmodels.EnvironmentSetting(
+                        'PROM_NODE_EXPORTER_OPTIONS',
+                        ','.join(pool_settings.prometheus.ne_options)
+                    )
+                )
+        if pool_settings.prometheus.ca_enabled:
+            pool.start_task.environment_settings.append(
+                batchmodels.EnvironmentSetting(
+                    'PROM_CADVISOR_PORT',
+                    pool_settings.prometheus.ca_port
+                )
+            )
+            if util.is_not_empty(pool_settings.prometheus.ca_options):
+                pool.start_task.environment_settings.append(
+                    batchmodels.EnvironmentSetting(
+                        'PROM_CADVISOR_OPTIONS',
+                        ','.join(pool_settings.prometheus.ca_options)
+                    )
+                )
     return (pool_settings, gluster_on_compute, pool)
 
 
@@ -2311,10 +2403,11 @@ def _adjust_settings_for_pool_creation(config):
         logger.warning(
             'override attempt recovery on unusable due to custom image')
         settings.set_attempt_recovery_on_unusable(config, False)
-    # TODO temporarily disable credential encryption with windows
-    if is_windows and settings.batch_shipyard_encryption_enabled(config):
+    # currently prometheus monitoring is only available on Linux nodes
+    if (is_windows and
+            (pool.prometheus.ne_enabled or pool.prometheus.ca_enabled)):
         raise ValueError(
-            'cannot enable credential encryption with windows pools')
+            'Prometheus monitoring is only available for Linux nodes')
 
 
 def _check_settings_for_auto_pool(config):

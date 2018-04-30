@@ -174,6 +174,12 @@ PoolAutopoolSettings = collections.namedtuple(
         'keep_alive',
     ]
 )
+PrometheusSettings = collections.namedtuple(
+    'PrometheusSettings', [
+        'ne_enabled', 'ne_port', 'ne_options', 'ca_enabled', 'ca_port',
+        'ca_options',
+    ]
+)
 PoolSettings = collections.namedtuple(
     'PoolSettings', [
         'id', 'vm_size', 'vm_count', 'resize_timeout', 'max_tasks_per_node',
@@ -184,7 +190,7 @@ PoolSettings = collections.namedtuple(
         'gpu_driver', 'ssh', 'rdp', 'additional_node_prep_commands_pre',
         'additional_node_prep_commands_post', 'virtual_network',
         'autoscale', 'node_fill_type', 'remote_access_control',
-        'certificates',
+        'certificates', 'prometheus',
     ]
 )
 SSHSettings = collections.namedtuple(
@@ -928,6 +934,26 @@ def is_pool_autoscale_enabled(config, pas=None):
     return util.is_not_empty(pas.formula) or pas.scenario is not None
 
 
+def prometheus_settings(config):
+    # type: (dict) -> PrometheusSettings
+    """Get Prometheus Settings
+    :param dict config: configuration object
+    :rtype: PrometheusSettings
+    :return Prometheus settings from specification
+    """
+    conf = _kv_read_checked(config, 'prometheus', default={})
+    ne_conf = _kv_read_checked(conf, 'node_exporter', default={})
+    ca_conf = _kv_read_checked(conf, 'cadvisor', default={})
+    return PrometheusSettings(
+        ne_enabled=_kv_read(ne_conf, 'enabled', default=False),
+        ne_port=_kv_read(ne_conf, 'port', default=9100),
+        ne_options=_kv_read_checked(ne_conf, 'options'),
+        ca_enabled=_kv_read(ca_conf, 'enabled', default=False),
+        ca_port=_kv_read(ca_conf, 'port', default=8080),
+        ca_options=_kv_read_checked(ca_conf, 'options'),
+    )
+
+
 def pool_settings(config):
     # type: (dict) -> PoolSettings
     """Get Pool settings
@@ -1119,6 +1145,7 @@ def pool_settings(config):
         node_fill_type=_kv_read_checked(conf, 'node_fill_type'),
         remote_access_control=rac,
         certificates=certs,
+        prometheus=prometheus_settings(conf),
     )
 
 

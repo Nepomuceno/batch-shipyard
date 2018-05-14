@@ -47,6 +47,7 @@ from . import autoscale
 from . import batch
 from . import crypto
 from . import data
+from . import heimdall
 from . import keyvault
 from . import misc
 from . import remotefs
@@ -186,6 +187,10 @@ _REMOTEFSSTAT_FILE = (
 _ALL_REMOTEFS_FILES = [
     _REMOTEFSPREP_FILE, _REMOTEFSADDBRICK_FILE, _REMOTEFSSTAT_FILE,
 ]
+_MONITORINGPREP_FILE = (
+    'shipyard_monitoring_bootstrap.sh',
+    pathlib.Path(_ROOT_PATH, 'scripts/shipyard_monitoring_bootstrap.sh')
+)
 
 
 def initialize_globals(verbose):
@@ -542,7 +547,7 @@ def _create_storage_cluster_mount_args(
     """
     fstab_mount = None
     sc_arg = None
-    ba = batch.get_batch_account(batch_mgmt_client, config)
+    ba = batch.get_batch_account(batch_mgmt_client, config)[0]
     # check for vnet/subnet presence
     if util.is_none_or_empty(subnet_id):
         raise RuntimeError(
@@ -3967,3 +3972,89 @@ def action_misc_tensorboard(
                 'cannot specify a task to tunnel Tensorboard to without the '
                 'corresponding job id')
     misc.tunnel_tensorboard(batch_client, config, jobid, taskid, logdir, image)
+
+
+def action_monitor_create(
+        auth_client, resource_client, compute_client, network_client,
+        blob_client, config, no_batch):
+    # type: (azure.mgmt.authorization.AuthorizationManagementClient,
+    #        azure.mgmt.resource.resources.ResourceManagementClient,
+    #        azure.mgmt.compute.ComputeManagementClient,
+    #        azure.mgmt.network.NetworkManagementClient,
+    #        azure.storage.blob.BlockBlobService, dict, bool) -> None
+    """Action: Monitor Create
+    :param azure.mgmt.authorization.AuthorizationManagementClient auth_client:
+        auth client
+    :param azure.mgmt.resource.resources.ResourceManagementClient
+        resource_client: resource client
+    :param azure.mgmt.compute.ComputeManagementClient compute_client:
+        compute client
+    :param azure.mgmt.network.NetworkManagementClient network_client:
+        network client
+    :param azure.storage.blob.BlockBlobService blob_client: blob client
+    :param dict config: configuration dict
+    :param bool no_batch: no batch monitoring
+    """
+    _check_resource_client(resource_client)
+    _check_compute_client(compute_client)
+    _check_network_client(network_client)
+    heimdall.create_monitoring_resource(
+        auth_client, resource_client, compute_client, network_client,
+        blob_client, config, _MONITORINGPREP_FILE)
+
+
+def action_monitor_ssh(
+        compute_client, network_client, config, tty, command):
+    # type: (azure.mgmt.compute.ComputeManagementClient,
+    #        azure.mgmt.network.NetworkManagementClient, dict,
+    #        bool, tuple) -> None
+    """Action: Monitor Ssh
+    :param azure.mgmt.compute.ComputeManagementClient compute_client:
+        compute client
+    :param azure.mgmt.network.NetworkManagementClient network_client:
+        network client
+    :param dict config: configuration dict
+    :param bool tty: allocate pseudo-tty
+    :param tuple command: command
+    """
+    _check_compute_client(compute_client)
+    _check_network_client(network_client)
+    heimdall.ssh_monitoring_resource(
+        compute_client, network_client, config, tty, command)
+
+
+def action_monitor_destroy(
+        resource_client, compute_client, network_client, blob_client, config,
+        delete_all_resources, delete_virtual_network, generate_from_prefix,
+        wait):
+    # type: (azure.mgmt.resource.resources.ResourceManagementClient,
+    #        azure.mgmt.compute.ComputeManagementClient,
+    #        azure.mgmt.network.NetworkManagementClient,
+    #        azure.storage.blob.BlockBlobService, dict, bool, bool,
+    #        bool, bool) -> None
+    """Action: Monitor Destroy
+    :param azure.mgmt.resource.resources.ResourceManagementClient
+        resource_client: resource client
+    :param azure.mgmt.compute.ComputeManagementClient compute_client:
+        compute client
+    :param azure.mgmt.network.NetworkManagementClient network_client:
+        network client
+    :param azure.storage.blob.BlockBlobService blob_client: blob client
+    :param dict config: configuration dict
+    :param bool delete_all_resources: delete all resources
+    :param bool delete_virtual_network: delete virtual network
+    :param bool generate_from_prefix: generate resources from hostname prefix
+    :param bool wait: wait for deletion to complete
+    """
+    _check_resource_client(resource_client)
+    _check_compute_client(compute_client)
+    _check_network_client(network_client)
+    if (generate_from_prefix and
+            (delete_all_resources or delete_virtual_network)):
+        raise ValueError(
+            'Cannot specify generate_from_prefix and a delete_* option')
+    heimdall.delete_monitoring_resource(
+        resource_client, compute_client, network_client, blob_client, config,
+        delete_virtual_network=delete_virtual_network,
+        delete_resource_group=delete_all_resources,
+        generate_from_prefix=generate_from_prefix, wait=wait)

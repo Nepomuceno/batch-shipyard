@@ -69,6 +69,7 @@ class CliContext(object):
         self.blob_client = None
         self.table_client = None
         self.keyvault_client = None
+        self.auth_client = None
         self.resource_client = None
         self.compute_client = None
         self.network_client = None
@@ -116,9 +117,37 @@ class CliContext(object):
             raise
         self._init_config(
             skip_global_config=False, skip_pool_config=True, fs_storage=True)
-        self.resource_client, self.compute_client, self.network_client, \
+        _, self.resource_client, self.compute_client, self.network_client, \
             self.storage_mgmt_client, _, _ = \
             convoy.clients.create_all_clients(self)
+        # inject storage account keys if via aad
+        convoy.fleet.fetch_storage_account_keys_from_aad(
+            self.storage_mgmt_client, self.config, fs_storage=True)
+        self.blob_client, _ = convoy.clients.create_storage_clients()
+        self._cleanup_after_initialize(
+            skip_global_config=False, skip_pool_config=True)
+
+    def initialize_for_monitor(self, no_batch=False):
+        # type: (CliContext, bool) -> None
+        """Initialize context for monitor commands
+        :param CliContext self: this
+        :param bool no_batch: don't monitor batch
+        """
+        self._read_credentials_config()
+        self._set_global_cli_options()
+        try:
+            self.keyvault_client = convoy.clients.create_keyvault_client(self)
+        except KeyError:
+            logger.error(
+                'Are you missing your configuration files or pointing to '
+                'the wrong location?')
+            raise
+        self._init_config(
+            skip_global_config=False, skip_pool_config=True, fs_storage=True)
+        self.auth_client, self.resource_client, self.compute_client, \
+            self.network_client, self.storage_mgmt_client, \
+            self.batch_mgmt_client, _ = convoy.clients.create_all_clients(
+                self, batch_clients=(not no_batch))
         # inject storage account keys if via aad
         convoy.fleet.fetch_storage_account_keys_from_aad(
             self.storage_mgmt_client, self.config, fs_storage=True)
@@ -161,7 +190,7 @@ class CliContext(object):
             raise
         self._init_config(
             skip_global_config=False, skip_pool_config=False, fs_storage=False)
-        self.resource_client, self.compute_client, self.network_client, \
+        _, self.resource_client, self.compute_client, self.network_client, \
             self.storage_mgmt_client, self.batch_mgmt_client, \
             self.batch_client = \
             convoy.clients.create_all_clients(self, batch_clients=True)
@@ -184,7 +213,7 @@ class CliContext(object):
         self._init_config(
             skip_global_config=False, skip_pool_config=False, fs_storage=False)
         # inject storage account keys if via aad
-        _, _, _, self.storage_mgmt_client, _, _ = \
+        _, _, _, _, self.storage_mgmt_client, _, _ = \
             convoy.clients.create_all_clients(self)
         convoy.fleet.fetch_storage_account_keys_from_aad(
             self.storage_mgmt_client, self.config, fs_storage=False)
@@ -767,6 +796,11 @@ def fs_options(f):
 def fs_cluster_options(f):
     f = fs_options(f)
     f = _storage_cluster_id_argument(f)
+    return f
+
+
+def monitor_options(f):
+    f = _azure_subscription_id_option(f)
     return f
 
 
@@ -2062,6 +2096,70 @@ def misc_tensorboard(ctx, jobid, taskid, logdir, image):
     ctx.initialize_for_batch()
     convoy.fleet.action_misc_tensorboard(
         ctx.batch_client, ctx.config, jobid, taskid, logdir, image)
+
+
+@cli.group()
+@pass_cli_context
+def monitor(ctx):
+    """Monitoring actions"""
+    pass
+
+
+@monitor.command('create')
+@click.option(
+    '--no-batch', is_flag=True, help='Do not monitor batch resources')
+@common_options
+@monitor_options
+@aad_options
+@pass_cli_context
+def monitor_create(ctx, no_batch):
+    """Create a monitoring resource"""
+    ctx.initialize_for_monitor(no_batch)
+    convoy.fleet.action_monitor_create(
+        ctx.auth_client, ctx.resource_client, ctx.compute_client,
+        ctx.network_client, ctx.blob_client, ctx.config, no_batch)
+
+
+@monitor.command('ssh')
+@click.option(
+    '--tty', is_flag=True, help='Allocate a pseudo-tty')
+@common_options
+@monitor_options
+@click.argument('command', nargs=-1)
+@aad_options
+@pass_cli_context
+def monitor_ssh(ctx, tty, command):
+    """Interactively login via SSH to monitoring resource virtual
+    machine in Azure"""
+    ctx.initialize_for_monitor()
+    convoy.fleet.action_monitor_ssh(
+        ctx.compute_client, ctx.network_client, ctx.config, tty, command)
+
+
+@monitor.command('destroy')
+@click.option(
+    '--delete-resource-group', is_flag=True,
+    help='Delete all resources in the monitoring resource group')
+@click.option(
+    '--delete-virtual-network', is_flag=True, help='Delete virtual network')
+@click.option(
+    '--generate-from-prefix', is_flag=True,
+    help='Generate resources to delete from monitoring hostname prefix')
+@click.option(
+    '--no-wait', is_flag=True, help='Do not wait for deletion to complete')
+@common_options
+@monitor_options
+@aad_options
+@pass_cli_context
+def monitor_destroy(
+        ctx, delete_resource_group, delete_virtual_network,
+        generate_from_prefix, no_wait):
+    """Destroy a monitoring resource"""
+    ctx.initialize_for_monitor()
+    convoy.fleet.action_monitor_destroy(
+        ctx.resource_client, ctx.compute_client, ctx.network_client,
+        ctx.blob_client, ctx.config, delete_resource_group,
+        delete_virtual_network, generate_from_prefix, not no_wait)
 
 
 if __name__ == '__main__':

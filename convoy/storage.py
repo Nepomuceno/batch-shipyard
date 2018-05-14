@@ -56,6 +56,7 @@ _STORAGE_CONTAINERS = {
     'blob_resourcefiles': None,
     'blob_torrents': None,
     'blob_remotefs': None,
+    'blob_monitoring': None,
     'table_dht': None,
     'table_torrentinfo': None,
     'table_images': None,
@@ -87,6 +88,7 @@ def set_storage_configuration(sep, postfix, sa, sakey, saep, sasexpiry):
     _STORAGE_CONTAINERS['blob_torrents'] = '-'.join(
         (sep + 'tor', postfix))
     _STORAGE_CONTAINERS['blob_remotefs'] = sep + 'remotefs'
+    _STORAGE_CONTAINERS['blob_monitoring'] = sep + 'monitoring'
     _STORAGE_CONTAINERS['table_dht'] = sep + 'dht'
     _STORAGE_CONTAINERS['table_torrentinfo'] = sep + 'torrentinfo'
     _STORAGE_CONTAINERS['table_images'] = sep + 'images'
@@ -446,21 +448,24 @@ def upload_resource_files(blob_client, config, files):
     return sas_urls
 
 
-def upload_for_remotefs(blob_client, files):
-    # type: (azure.storage.blob.BlockBlobService, List[tuple]) -> List[str]
-    """Upload files to blob storage for remote fs
+def upload_for_nonbatch(blob_client, files, kind):
+    # type: (azure.storage.blob.BlockBlobService, List[tuple],
+    #        str) -> List[str]
+    """Upload files to blob storage for monitoring
     :param azure.storage.blob.BlockBlobService blob_client: blob client
     :param dict config: configuration dict
     :param list files: files to upload
+    :param str kind: kind, "remotefs" or "monitoring"
     :rtype: list
     :return: list of file urls
     """
+    kind = 'blob_{}'.format(kind.lower())
     ret = []
     for file in files:
-        _check_file_and_upload(blob_client, file, 'blob_remotefs')
+        _check_file_and_upload(blob_client, file, kind)
         ret.append('https://{}.blob.{}/{}/{}'.format(
             _STORAGEACCOUNT, _STORAGEACCOUNTEP,
-            _STORAGE_CONTAINERS['blob_remotefs'], file[0]))
+            _STORAGE_CONTAINERS[kind], file[0]))
     return ret
 
 
@@ -480,7 +485,7 @@ def delete_storage_containers(
             logger.debug('deleting table: {}'.format(_STORAGE_CONTAINERS[key]))
             table_client.delete_table(_STORAGE_CONTAINERS[key])
         elif key.startswith('blob_'):
-            if key != 'blob_remotefs':
+            if (key != 'blob_remotefs' and key != 'blob_monitoring'):
                 logger.debug('deleting container: {}'.format(
                     _STORAGE_CONTAINERS[key]))
                 blob_client.delete_container(_STORAGE_CONTAINERS[key])
@@ -564,7 +569,7 @@ def clear_storage_containers(
     bs = settings.batch_shipyard_settings(config)
     for key in _STORAGE_CONTAINERS:
         if not tables_only and key.startswith('blob_'):
-            if key != 'blob_remotefs':
+            if (key != 'blob_remotefs' and key != 'blob_monitoring'):
                 _clear_blobs(blob_client, _STORAGE_CONTAINERS[key])
         elif key.startswith('table_'):
             # TODO remove in a future release: unused registry table
@@ -589,6 +594,8 @@ def create_storage_containers(blob_client, table_client, config):
     bs = settings.batch_shipyard_settings(config)
     for key in _STORAGE_CONTAINERS:
         if key.startswith('blob_'):
+            if key == 'blob_remotefs' or key == 'blob_monitoring':
+                continue
             logger.info('creating container: {}'.format(
                 _STORAGE_CONTAINERS[key]))
             blob_client.create_container(_STORAGE_CONTAINERS[key])
@@ -602,22 +609,26 @@ def create_storage_containers(blob_client, table_client, config):
             table_client.create_table(_STORAGE_CONTAINERS[key])
 
 
-def create_storage_containers_remotefs(blob_client):
-    # type: (azureblob.BlockBlobService) -> None
-    """Create storage containers used for remotefs
+def create_storage_containers_nonbatch(blob_client, kind):
+    # type: (azureblob.BlockBlobService, str) -> None
+    """Create storage containers used for monitoring
     :param azure.storage.blob.BlockBlobService blob_client: blob client
+    :param str kind: kind, "remotefs" or "monitoring"
     """
-    contname = _STORAGE_CONTAINERS['blob_remotefs']
+    kind = 'blob_{}'.format(kind.lower())
+    contname = _STORAGE_CONTAINERS[kind]
     logger.info('creating container: {}'.format(contname))
     blob_client.create_container(contname)
 
 
-def delete_storage_containers_remotefs(blob_client):
-    # type: (azureblob.BlockBlobService) -> None
-    """Delete storage containers used for remotefs
+def delete_storage_containers_nonbatch(blob_client, kind):
+    # type: (azureblob.BlockBlobService, str) -> None
+    """Delete storage containers used for monitoring
     :param azure.storage.blob.BlockBlobService blob_client: blob client
+    :param str kind: kind, "remotefs" or "monitoring"
     """
-    contname = _STORAGE_CONTAINERS['blob_remotefs']
+    kind = 'blob_{}'.format(kind.lower())
+    contname = _STORAGE_CONTAINERS[kind]
     logger.info('deleting container: {}'.format(contname))
     try:
         blob_client.delete_container(contname)
@@ -625,7 +636,7 @@ def delete_storage_containers_remotefs(blob_client):
         logger.warning('container not found: {}'.format(contname))
 
 
-def delete_storage_containers_remotefs_boot_diagnostics(
+def delete_storage_containers_boot_diagnostics(
         blob_client, vm_name, vm_id):
     # type: (azureblob.BlockBlobService, str, str) -> None
     """Delete storage containers used for remotefs bootdiagnostics
@@ -633,8 +644,9 @@ def delete_storage_containers_remotefs_boot_diagnostics(
     :param str vm_name: vm name
     :param str vm_id: vm id
     """
+    name = re.sub('[\W_]+', '', vm_name)
     contname = 'bootdiagnostics-{}-{}'.format(
-        re.sub('[\W_]+', '', vm_name)[0:9], vm_id)
+        name[0:min((9, len(name)))], vm_id)
     logger.info('deleting container: {}'.format(contname))
     try:
         blob_client.delete_container(contname)

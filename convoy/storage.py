@@ -61,6 +61,7 @@ _STORAGE_CONTAINERS = {
     'table_torrentinfo': None,
     'table_images': None,
     'table_globalresources': None,
+    'table_monitoring': None,
     'table_perf': None,
     # TODO remove following in future release
     'table_registry': None,
@@ -93,6 +94,7 @@ def set_storage_configuration(sep, postfix, sa, sakey, saep, sasexpiry):
     _STORAGE_CONTAINERS['table_torrentinfo'] = sep + 'torrentinfo'
     _STORAGE_CONTAINERS['table_images'] = sep + 'images'
     _STORAGE_CONTAINERS['table_globalresources'] = sep + 'gr'
+    _STORAGE_CONTAINERS['table_monitoring'] = sep + 'monitoring'
     _STORAGE_CONTAINERS['table_perf'] = sep + 'perf'
     # TODO remove following containers in future release
     _STORAGE_CONTAINERS['table_registry'] = sep + 'registry'
@@ -150,6 +152,15 @@ def get_storageaccount_endpoint():
     :return: storage account endpoint
     """
     return _STORAGEACCOUNTEP
+
+
+def get_storage_table_monitoring():
+    # type: (None) -> str
+    """Get the table associated with monitoring
+    :rtype: str
+    :return: table name for monitoring
+    """
+    return _STORAGE_CONTAINERS['table_monitoring']
 
 
 def populate_storage_account_keys_from_aad(storage_mgmt_client, config):
@@ -395,6 +406,60 @@ def populate_global_resource_blobs(blob_client, table_client, config):
         blob_client, table_client, config, pk, dr, 'singularity_images')
 
 
+def add_resources_to_monitor(table_client, config, pools):
+    # type: (azuretable.TableService, dict, List[str]) -> None
+    """Populate resources to monitor
+    :param azure.cosmosdb.table.TableService table_client: table client
+    :param dict config: configuration dict
+    :param list pools: pools to monitor
+    """
+    bc = settings.credentials_batch(config)
+    for poolid in pools:
+        entity = {
+            'PartitionKey': 'pool',
+            'RowKey': '{}${}'.format(bc.account, poolid),
+            'BatchServiceUrl': bc.account_service_url,
+            'AadEndpoint': bc.aad.endpoint,
+            'AadAuthorityUrl': bc.aad.authority_url,
+        }
+        if settings.verbose(config):
+            logger.debug('inserting pool monitor resource entity: {}'.format(
+                entity))
+        try:
+            table_client.insert_entity(
+                _STORAGE_CONTAINERS['table_monitoring'], entity)
+        except azure.common.AzureConflictHttpError:
+            logger.error('monitoring for pool {} already exists'.format(
+                poolid))
+        else:
+            logger.debug('resource monitor added for pool {}'.format(poolid))
+
+
+def remove_resources_from_monitoring(table_client, config, all, pools):
+    # type: (azuretable.TableService, dict, bool, List[str]) -> None
+    """Remove resources from monitoring
+    :param azure.cosmosdb.table.TableService table_client: table client
+    :param dict config: configuration dict
+    :param bool all: all resource monitors
+    :param list pools: pools to monitor
+    """
+    if all:
+        _clear_table(
+            table_client, _STORAGE_CONTAINERS['table_monitoring'], config,
+            pool_id=None, pk='pool')
+        return
+    bc = settings.credentials_batch(config)
+    for poolid in pools:
+        try:
+            table_client.delete_entity(
+                _STORAGE_CONTAINERS['table_monitoring'], partition_key='pool',
+                row_key='{}${}'.format(bc.account, poolid))
+        except azure.common.AzureMissingResourceHttpError:
+            logger.error('pool {} is not monitored'.format(poolid))
+        else:
+            logger.debug('resource monitor removed for pool {}'.format(poolid))
+
+
 def _check_file_and_upload(blob_client, file, container):
     # type: (azure.storage.blob.BlockBlobService, tuple, str) -> None
     """Upload file to blob storage if necessary
@@ -529,15 +594,17 @@ def _clear_blob_task_resourcefiles(blob_client, container, config):
             blob_client.delete_blob(container, blob.name)
 
 
-def _clear_table(table_client, table_name, config, pool_id=None):
-    # type: (azuretable.TableService, str, dict, str) -> None
+def _clear_table(table_client, table_name, config, pool_id=None, pk=None):
+    # type: (azuretable.TableService, str, dict, str, str) -> None
     """Clear table entities
     :param azure.cosmosdb.table.TableService table_client: table client
     :param str table_name: table name
     :param dict config: configuration dict
     :param str pool_id: use specified pool id instead
+    :param str pk: partition key
     """
-    pk = _construct_partition_key_from_config(config, pool_id=pool_id)
+    if pk is None:
+        pk = _construct_partition_key_from_config(config, pool_id=pool_id)
     logger.debug('clearing table (pk={}): {}'.format(pk, table_name))
     ents = table_client.query_entities(
         table_name, filter='PartitionKey eq \'{}\''.format(pk))
@@ -575,6 +642,8 @@ def clear_storage_containers(
             # TODO remove in a future release: unused registry table
             if key == 'table_registry':
                 continue
+            if key == 'table_monitoring':
+                continue
             try:
                 _clear_table(
                     table_client, _STORAGE_CONTAINERS[key], config,
@@ -603,37 +672,57 @@ def create_storage_containers(blob_client, table_client, config):
             # TODO remove in a future release: unused registry table
             if key == 'table_registry':
                 continue
+            if key == 'table_monitoring':
+                continue
             if key == 'table_perf' and not bs.store_timing_metrics:
                 continue
             logger.info('creating table: {}'.format(_STORAGE_CONTAINERS[key]))
             table_client.create_table(_STORAGE_CONTAINERS[key])
 
 
-def create_storage_containers_nonbatch(blob_client, kind):
+def create_storage_containers_nonbatch(blob_client, table_client, kind):
     # type: (azureblob.BlockBlobService, str) -> None
     """Create storage containers used for monitoring
     :param azure.storage.blob.BlockBlobService blob_client: blob client
+    :param azure.cosmosdb.table.TableService table_client: table client
     :param str kind: kind, "remotefs" or "monitoring"
     """
-    kind = 'blob_{}'.format(kind.lower())
-    contname = _STORAGE_CONTAINERS[kind]
+    key = 'blob_{}'.format(kind.lower())
+    contname = _STORAGE_CONTAINERS[key]
     logger.info('creating container: {}'.format(contname))
     blob_client.create_container(contname)
+    try:
+        key = 'table_{}'.format(kind.lower())
+        contname = _STORAGE_CONTAINERS[key]
+    except KeyError:
+        pass
+    else:
+        logger.info('creating table: {}'.format(contname))
+        table_client.create_table(contname)
 
 
-def delete_storage_containers_nonbatch(blob_client, kind):
+def delete_storage_containers_nonbatch(blob_client, table_client, kind):
     # type: (azureblob.BlockBlobService, str) -> None
     """Delete storage containers used for monitoring
     :param azure.storage.blob.BlockBlobService blob_client: blob client
+    :param azure.cosmosdb.table.TableService table_client: table client
     :param str kind: kind, "remotefs" or "monitoring"
     """
-    kind = 'blob_{}'.format(kind.lower())
-    contname = _STORAGE_CONTAINERS[kind]
+    key = 'blob_{}'.format(kind.lower())
+    contname = _STORAGE_CONTAINERS[key]
     logger.info('deleting container: {}'.format(contname))
     try:
         blob_client.delete_container(contname)
     except azure.common.AzureMissingResourceHttpError:
         logger.warning('container not found: {}'.format(contname))
+    try:
+        key = 'table_{}'.format(kind.lower())
+        contname = _STORAGE_CONTAINERS[key]
+    except KeyError:
+        pass
+    else:
+        logger.debug('deleting table: {}'.format(contname))
+        table_client.create_table(contname)
 
 
 def delete_storage_containers_boot_diagnostics(

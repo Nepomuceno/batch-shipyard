@@ -202,9 +202,9 @@ def log_batch_account_info(
     :param str account_name: account name
     :param str resource_group: resource group of Batch account
     """
-    ba = get_batch_account(
+    ba, _ = get_batch_account(
         batch_mgmt_client, config, account_name=account_name,
-        resource_group=resource_group)[0]
+        resource_group=resource_group)
     if settings.raw(config):
         return
     log = ['batch account information']

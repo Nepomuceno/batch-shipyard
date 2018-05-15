@@ -127,11 +127,10 @@ class CliContext(object):
         self._cleanup_after_initialize(
             skip_global_config=False, skip_pool_config=True)
 
-    def initialize_for_monitor(self, no_batch=False):
-        # type: (CliContext, bool) -> None
+    def initialize_for_monitor(self):
+        # type: (CliContext) -> None
         """Initialize context for monitor commands
         :param CliContext self: this
-        :param bool no_batch: don't monitor batch
         """
         self._read_credentials_config()
         self._set_global_cli_options()
@@ -145,13 +144,13 @@ class CliContext(object):
         self._init_config(
             skip_global_config=False, skip_pool_config=True, fs_storage=True)
         self.auth_client, self.resource_client, self.compute_client, \
-            self.network_client, self.storage_mgmt_client, \
-            self.batch_mgmt_client, _ = convoy.clients.create_all_clients(
-                self, batch_clients=(not no_batch))
+            self.network_client, self.storage_mgmt_client, _, _ = \
+            convoy.clients.create_all_clients(self)
         # inject storage account keys if via aad
         convoy.fleet.fetch_storage_account_keys_from_aad(
             self.storage_mgmt_client, self.config, fs_storage=True)
-        self.blob_client, _ = convoy.clients.create_storage_clients()
+        self.blob_client, self.table_client = \
+            convoy.clients.create_storage_clients()
         self._cleanup_after_initialize(
             skip_global_config=False, skip_pool_config=True)
 
@@ -2106,18 +2105,45 @@ def monitor(ctx):
 
 
 @monitor.command('create')
-@click.option(
-    '--no-batch', is_flag=True, help='Do not monitor batch resources')
 @common_options
 @monitor_options
 @aad_options
 @pass_cli_context
-def monitor_create(ctx, no_batch):
+def monitor_create(ctx):
     """Create a monitoring resource"""
-    ctx.initialize_for_monitor(no_batch)
+    ctx.initialize_for_monitor()
     convoy.fleet.action_monitor_create(
         ctx.auth_client, ctx.resource_client, ctx.compute_client,
-        ctx.network_client, ctx.blob_client, ctx.config, no_batch)
+        ctx.network_client, ctx.blob_client, ctx.table_client, ctx.config)
+
+
+@monitor.command('add')
+@click.option(
+    '--poolid', multiple=True, help='Add a pool to monitor')
+@common_options
+@monitor_options
+@aad_options
+@pass_cli_context
+def monitor_add(ctx, poolid):
+    """Add a resource to monitor"""
+    ctx.initialize_for_monitor()
+    convoy.fleet.action_monitor_add(ctx.table_client, ctx.config, poolid)
+
+
+@monitor.command('remove')
+@click.option(
+    '--all', is_flag=True, help='Remove all resources from monitoring')
+@click.option(
+    '--poolid', multiple=True, help='Remove a pool from monitoring')
+@common_options
+@monitor_options
+@aad_options
+@pass_cli_context
+def monitor_remove(ctx, all, poolid):
+    """Remove a resource from monitoring"""
+    ctx.initialize_for_monitor()
+    convoy.fleet.action_monitor_remove(
+        ctx.table_client, ctx.config, all, poolid)
 
 
 @monitor.command('ssh')
@@ -2158,7 +2184,7 @@ def monitor_destroy(
     ctx.initialize_for_monitor()
     convoy.fleet.action_monitor_destroy(
         ctx.resource_client, ctx.compute_client, ctx.network_client,
-        ctx.blob_client, ctx.config, delete_resource_group,
+        ctx.blob_client, ctx.table_client, ctx.config, delete_resource_group,
         delete_virtual_network, generate_from_prefix, not no_wait)
 
 

@@ -11,6 +11,7 @@ DOCKER_CE_VERSION_DEBIAN=18.05.0
 # consts
 # TODO switch version back to stable
 DOCKER_CE_PACKAGE_DEBIAN="docker-ce=${DOCKER_CE_VERSION_DEBIAN}~ce~3-0~"
+SHIPYARD_CONF_FILE=/etc/batch-shipyard.json
 
 log() {
     local level=$1
@@ -57,19 +58,44 @@ if [ "$PACKAGER" == "apt" ]; then
     export DEBIAN_FRONTEND=noninteractive
 fi
 
+# globals
+aad_cloud=
+storage_account=
+table_name=
+shipyardversion=
+
 # process command line options
-while getopts "h?" opt; do
+while getopts "h?a:s:v:" opt; do
     case "$opt" in
         h|\?)
             echo "shipyard_monitoring_bootstrap.sh parameters"
             echo ""
+            echo "-a [aad cloud type] AAD cloud type for MSI"
+            echo "-s [storage account:table name] monitoring table"
+            echo "-v [version] batch-shipyard version"
             echo ""
             exit 1
+            ;;
+        a)
+            aad_cloud=${OPTARG,,}
+            ;;
+        s)
+            IFS=':' read -ra ss <<< "${OPTARG,,}"
+            storage_account=${ss[0]}
+            table_name=${ss[1]}
+            ;;
+        v)
+            shipyardversion=$OPTARG
             ;;
     esac
 done
 shift $((OPTIND-1))
 [ "$1" = "--" ] && shift
+# check required params
+if [ -z "$aad_cloud" ]; then
+    log ERROR "AAD cloud type not specified"
+    exit 1
+fi
 
 check_for_buggy_ntfs_mount() {
     # Check to ensure sdb1 mount is not mounted as ntfs
@@ -171,10 +197,7 @@ install_packages() {
 install_docker_host_engine() {
     log DEBUG "Installing Docker Host Engine"
     # set vars
-    local srvstart="systemctl start docker.service"
     local srvstop="systemctl stop docker.service"
-    local srvdisable="systemctl disable docker.service"
-    local srvstatus="systemctl --no-pager status docker.service"
     if [ "$PACKAGER" == "apt" ]; then
         local repo=https://download.docker.com/linux/"${DISTRIB_ID}"
         local gpgkey="${repo}"/gpg
@@ -209,22 +232,9 @@ install_docker_host_engine() {
     refresh_package_index
     # install docker engine
     install_packages "$dockerversion"
-    # disable docker from auto-start due to temp disk issues
-    $srvstop
-    $srvdisable
-    # ensure docker daemon modifications are idempotent
-    rm -rf /var/lib/docker
-    mkdir -p /etc/docker
-    if [ "$PACKAGER" == "apt" ]; then
-        echo "{ \"data-root\": \"$USER_MOUNTPOINT/docker\", \"hosts\": [ \"fd://\", \"unix:///var/run/docker.sock\", \"tcp://127.0.0.1:2375\" ] }" > /etc/docker/daemon.json
-    else
-        echo "{ \"data-root\": \"$USER_MOUNTPOINT/docker\", \"hosts\": [ \"unix:///var/run/docker.sock\", \"tcp://127.0.0.1:2375\" ] }" > /etc/docker/daemon.json
-    fi
-    # ensure no options are specified after dockerd
-    sed -i 's|^ExecStart=/usr/bin/dockerd.*|ExecStart=/usr/bin/dockerd|' "${SYSTEMD_PATH}"/docker.service
-    systemctl daemon-reload
-    $srvstart
-    $srvstatus
+    systemctl start docker.service
+    systemctl enable docker.service
+    systemctl --no-pager status docker.service
     docker info
     log INFO "Docker Host Engine installed"
 }
@@ -237,7 +247,21 @@ check_for_buggy_ntfs_mount
 # set sudoers to not require tty
 sed -i 's/^Defaults[ ]*requiretty/# Defaults requiretty/g' /etc/sudoers
 
+# write shipyard config
+cat > $SHIPYARD_CONF_FILE << EOF
+{
+    "aad_cloud": $aad_cloud,
+    "storage": {
+        "account": $storage_account,
+        "table_name": $table_name,
+    }
+}
+EOF
+
 # install docker host engine
 install_docker_host_engine
+
+# TODO start docker image with auto restart (--rm -d --restart always -v $SHIPYARD_CONF_FILE:$SHIPYARD_CONF_FILE:ro)
+# TODO use docker compose instead with prometheus/grafana, requires systemd unit file
 
 log INFO "Bootstrap completed"

@@ -525,7 +525,7 @@ def create_storage_cluster(
             config, 'create storage cluster {}'.format(sc_id)):
         return
     # create storage container
-    storage.create_storage_containers_nonbatch(blob_client, 'remotefs')
+    storage.create_storage_containers_nonbatch(blob_client, None, 'remotefs')
     # upload scripts to blob storage for customscript vm extension
     blob_urls = storage.upload_for_nonbatch(
         blob_client, remotefs_files, 'remotefs')
@@ -774,7 +774,7 @@ def resize_storage_cluster(
             config, 'resize storage cluster {}'.format(sc_id)):
         return False
     # re-create storage container in case it got deleted
-    storage.create_storage_containers_nonbatch(blob_client, 'remotefs')
+    storage.create_storage_containers_nonbatch(blob_client, None, 'remotefs')
     # upload scripts to blob storage for customscript vm extension
     blob_urls = storage.upload_for_nonbatch(
         blob_client, remotefs_files, 'remotefs')
@@ -1480,7 +1480,7 @@ def delete_storage_cluster(
             storage.delete_storage_containers_boot_diagnostics(
                 blob_client, vm_name, vm_id)
     # delete storage container
-    storage.delete_storage_containers_nonbatch(blob_client, 'remotefs')
+    storage.delete_storage_containers_nonbatch(blob_client, None, 'remotefs')
     # wait for all async ops to complete
     if wait:
         logger.debug('waiting for network security groups to delete')

@@ -547,7 +547,7 @@ def _create_storage_cluster_mount_args(
     """
     fstab_mount = None
     sc_arg = None
-    ba = batch.get_batch_account(batch_mgmt_client, config)[0]
+    ba, _ = batch.get_batch_account(batch_mgmt_client, config)
     # check for vnet/subnet presence
     if util.is_none_or_empty(subnet_id):
         raise RuntimeError(
@@ -956,7 +956,7 @@ def _construct_pool_object(
     #        azure.mgmt.network.NetworkManagementClient,
     #        azure.mgmt.batch.BatchManagementClient,
     #        azure.batch.batch_service_client.BatchServiceClient,
-    #        azureblob.BlockBlobService, dict) -> None
+    #        azure.storage.blob.BlockBlobService, dict) -> None
     """Construct a pool add parameter object for create pool along with
     uploading resource files
     :param azure.mgmt.resource.resources.ResourceManagementClient
@@ -1492,7 +1492,7 @@ def _construct_auto_pool_specification(
     #        azure.mgmt.network.NetworkManagementClient,
     #        azure.mgmt.batch.BatchManagementClient,
     #        azure.batch.batch_service_client.BatchServiceClient,
-    #        azureblob.BlockBlobService, dict) -> None
+    #        azure.storage.blob.BlockBlobService, dict) -> None
     """Construct an auto pool specification
     :param azure.mgmt.resource.resources.ResourceManagementClient
         resource_client: resource client
@@ -1543,7 +1543,7 @@ def _add_pool(
     #        azure.mgmt.network.NetworkManagementClient,
     #        azure.mgmt.batch.BatchManagementClient,
     #        azure.batch.batch_service_client.BatchServiceClient,
-    #        azureblob.BlockBlobService, dict) -> None
+    #        azure.storage.blob.BlockBlobService, dict) -> None
     """Add a Batch pool to account
     :param azure.mgmt.resource.resources.ResourceManagementClient
         resource_client: resource client
@@ -1632,8 +1632,8 @@ def _add_pool(
 
 def _setup_glusterfs(
         batch_client, blob_client, config, nodes, shell_script, cmdline=None):
-    # type: (batchsc.BatchServiceClient, azureblob.BlockBlobService, dict,
-    #        List[batchmodels.ComputeNode], str, str) -> None
+    # type: (batchsc.BatchServiceClient, azure.storage.blob.BlockBlobService,
+    #        dict, List[batchmodels.ComputeNode], str, str) -> None
     """Setup glusterfs via multi-instance task
     :param batch_client: The batch client to use.
     :type batch_client: `azure.batch.batch_service_client.BatchServiceClient`
@@ -2896,8 +2896,8 @@ def action_pool_add(
     #        azure.mgmt.network.NetworkManagementClient,
     #        azure.mgmt.batch.BatchManagementClient,
     #        azure.batch.batch_service_client.BatchServiceClient,
-    #        azureblob.BlockBlobService, azuretable.TableService,
-    #        dict) -> None
+    #        azure.storage.blob.BlockBlobService,
+    #        azure.cosmosdb.table.TableService, dict) -> None
     """Action: Pool Add
     :param azure.mgmt.resource.resources.ResourceManagementClient
         resource_client: resource client
@@ -2944,8 +2944,8 @@ def action_pool_list(batch_client, config):
 def action_pool_delete(
         batch_client, blob_client, table_client, config, pool_id=None,
         wait=False):
-    # type: (batchsc.BatchServiceClient, azureblob.BlockBlobService,
-    #        azuretable.TableService, dict, str, bool) -> None
+    # type: (batchsc.BatchServiceClient, azure.storage.blob.BlockBlobService,
+    #        azure.cosmosdb.table.TableService, dict, str, bool) -> None
     """Action: Pool Delete
     :param azure.batch.batch_service_client.BatchServiceClient batch_client:
         batch client
@@ -2981,7 +2981,7 @@ def action_pool_delete(
 
 
 def action_pool_resize(batch_client, blob_client, config, wait):
-    # type: (batchsc.BatchServiceClient, azureblob.BlockBlobService,
+    # type: (batchsc.BatchServiceClient, azure.storage.blob.BlockBlobService,
     #        dict, bool) -> None
     """Resize pool that may contain glusterfs
     :param azure.batch.batch_service_client.BatchServiceClient batch_client:
@@ -3312,8 +3312,8 @@ def action_pool_nodes_reboot(
 
 def action_diag_logs_upload(
         batch_client, blob_client, config, cardinal, nodeid, wait):
-    # type: (batchsc.BatchServiceClient, azureblob.BlockBlobService, dict,
-    #        int, str, bool) -> None
+    # type: (batchsc.BatchServiceClient, azure.storage.blob.BlockBlobService,
+    #        dict, int, str, bool) -> None
     """Action: Diag Logs Upload
     :param azure.batch.batch_service_client.BatchServiceClient batch_client:
         batch client
@@ -3435,7 +3435,8 @@ def action_jobs_add(
     #        azure.mgmt.network.NetworkManagementClient,
     #        azure.mgmt.batch.BatchManagementClient,
     #        azure.batch.batch_service_client.BatchServiceClient,
-    #        azureblob.BlockBlobService, azuretable.TableService,
+    #        azure.storage.blob.BlockBlobService,
+    #        azure.cosmosdb.table.TableService,
     #        azure.keyvault.KeyVaultClient, dict, bool, str) -> None
     """Action: Jobs Add
     :param azure.mgmt.resource.resources.ResourceManagementClient
@@ -3588,8 +3589,8 @@ def action_jobs_tasks_del(batch_client, config, jobid, taskid, wait):
 def action_jobs_del_or_term(
         batch_client, blob_client, table_client, config, delete, all_jobs,
         all_jobschedules, jobid, jobscheduleid, termtasks, wait):
-    # type: (batchsc.BatchServiceClient, azureblob.BlockBlobService,
-    #        azuretable.TableService, dict, bool, bool, str, str,
+    # type: (batchsc.BatchServiceClient, azure.storage.blob.BlockBlobService,
+    #        azure.cosmosdb.table.TableService, dict, bool, bool, str, str,
     #        bool, bool) -> None
     """Action: Jobs Del or Term
     :param azure.batch.batch_service_client.BatchServiceClient batch_client:
@@ -3780,8 +3781,8 @@ def action_jobs_stats(batch_client, config, job_id):
 
 def action_storage_del(
         blob_client, table_client, config, clear_tables, poolid):
-    # type: (azureblob.BlockBlobService, azuretable.TableService,
-    #        dict, bool, str) -> None
+    # type: (azure.storage.blob.BlockBlobService,
+    #        azure.cosmosdb.table.TableService, dict, bool, str) -> None
     """Action: Storage Del
     :param azure.storage.blob.BlockBlobService blob_client: blob client
     :param azure.cosmosdb.table.TableService table_client: table client
@@ -3801,8 +3802,8 @@ def action_storage_del(
 
 
 def action_storage_clear(blob_client, table_client, config, poolid):
-    # type: (azureblob.BlockBlobService, azuretable.TableService, dict,
-    #        str) -> None
+    # type: (azure.storage.blob.BlockBlobService,
+    #        azure.cosmosdb.table.TableService, dict, str) -> None
     """Action: Storage Clear
     :param azure.storage.blob.BlockBlobService blob_client: blob client
     :param azure.cosmosdb.table.TableService table_client: table client
@@ -3976,12 +3977,13 @@ def action_misc_tensorboard(
 
 def action_monitor_create(
         auth_client, resource_client, compute_client, network_client,
-        blob_client, config, no_batch):
+        blob_client, table_client, config):
     # type: (azure.mgmt.authorization.AuthorizationManagementClient,
     #        azure.mgmt.resource.resources.ResourceManagementClient,
     #        azure.mgmt.compute.ComputeManagementClient,
     #        azure.mgmt.network.NetworkManagementClient,
-    #        azure.storage.blob.BlockBlobService, dict, bool) -> None
+    #        azure.storage.blob.BlockBlobService,
+    #        azure.cosmosdb.table.TableService, dict) -> None
     """Action: Monitor Create
     :param azure.mgmt.authorization.AuthorizationManagementClient auth_client:
         auth client
@@ -3992,15 +3994,49 @@ def action_monitor_create(
     :param azure.mgmt.network.NetworkManagementClient network_client:
         network client
     :param azure.storage.blob.BlockBlobService blob_client: blob client
+    :param azure.cosmosdb.table.TableService table_client: table client
     :param dict config: configuration dict
-    :param bool no_batch: no batch monitoring
     """
     _check_resource_client(resource_client)
     _check_compute_client(compute_client)
     _check_network_client(network_client)
+    # ensure aad creds are populated
+    mgmt_aad = settings.credentials_management(config)
+    if (util.is_none_or_empty(mgmt_aad.subscription_id) or
+            util.is_none_or_empty(mgmt_aad.aad.authority_url)):
+        raise ValueError('management aad credentials are invalid')
     heimdall.create_monitoring_resource(
         auth_client, resource_client, compute_client, network_client,
-        blob_client, config, _MONITORINGPREP_FILE)
+        blob_client, table_client, config, _MONITORINGPREP_FILE)
+
+
+def action_monitor_add(table_client, config, poolid):
+    # type: (azure.cosmosdb.table.TableService, dict, List[str]) -> None
+    """Action: Monitor Add
+    :param azure.cosmosdb.table.TableService table_client: table client
+    :param dict config: configuration dict
+    :param list poolid: list of pool ids to monitor
+    """
+    # ensure that we are operating in AAD mode for batch
+    if util.is_not_empty(poolid):
+        bc = settings.credentials_batch(config)
+        _check_for_batch_aad(bc, 'add pool monitors')
+    storage.add_resources_to_monitor(table_client, config, poolid)
+
+
+def action_monitor_remove(table_client, config, all, poolid):
+    # type: (azure.cosmosdb.table.TableService, dict, bool, List[str]) -> None
+    """Action: Monitor Remove
+    :param azure.cosmosdb.table.TableService table_client: table client
+    :param dict config: configuration dict
+    :param bool all: all resource monitors
+    :param list poolid: list of pool ids to remove from monitoring
+    """
+    # ensure that we are operating in AAD mode for batch
+    if not all and util.is_not_empty(poolid):
+        bc = settings.credentials_batch(config)
+        _check_for_batch_aad(bc, 'remove pool monitors')
+    storage.remove_resources_from_monitoring(table_client, config, all, poolid)
 
 
 def action_monitor_ssh(
@@ -4024,13 +4060,14 @@ def action_monitor_ssh(
 
 
 def action_monitor_destroy(
-        resource_client, compute_client, network_client, blob_client, config,
-        delete_all_resources, delete_virtual_network, generate_from_prefix,
-        wait):
+        resource_client, compute_client, network_client, blob_client,
+        table_client, config, delete_all_resources, delete_virtual_network,
+        generate_from_prefix, wait):
     # type: (azure.mgmt.resource.resources.ResourceManagementClient,
     #        azure.mgmt.compute.ComputeManagementClient,
     #        azure.mgmt.network.NetworkManagementClient,
-    #        azure.storage.blob.BlockBlobService, dict, bool, bool,
+    #        azure.storage.blob.BlockBlobService,
+    #        azure.cosmosdb.table.TableService, dict, bool, bool,
     #        bool, bool) -> None
     """Action: Monitor Destroy
     :param azure.mgmt.resource.resources.ResourceManagementClient
@@ -4040,6 +4077,7 @@ def action_monitor_destroy(
     :param azure.mgmt.network.NetworkManagementClient network_client:
         network client
     :param azure.storage.blob.BlockBlobService blob_client: blob client
+    :param azure.cosmosdb.table.TableService table_client: table client
     :param dict config: configuration dict
     :param bool delete_all_resources: delete all resources
     :param bool delete_virtual_network: delete virtual network
@@ -4054,7 +4092,7 @@ def action_monitor_destroy(
         raise ValueError(
             'Cannot specify generate_from_prefix and a delete_* option')
     heimdall.delete_monitoring_resource(
-        resource_client, compute_client, network_client, blob_client, config,
-        delete_virtual_network=delete_virtual_network,
+        resource_client, compute_client, network_client, blob_client,
+        table_client, config, delete_virtual_network=delete_virtual_network,
         delete_resource_group=delete_all_resources,
         generate_from_prefix=generate_from_prefix, wait=wait)

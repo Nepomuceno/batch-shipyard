@@ -1327,6 +1327,29 @@ def raw_credentials(config, omit_keyvault):
     return conf
 
 
+def determine_cloud_type_from_aad(config):
+    # type: (dict) -> str
+    """Determine cloud type from aad settings
+    :param dict config: configuration object
+    :rtype: str
+    :return: cloud type string
+    """
+    auth_url = credentials_management(
+        config).aad.authority_url.rstrip('/').lower()
+    if auth_url.endswith('.com'):
+        cloud_type = 'public'
+    elif auth_url.endswith('.cn'):
+        cloud_type = 'china'
+    elif auth_url.endswith('.de'):
+        cloud_type = 'germany'
+    elif auth_url.endswith('.us'):
+        cloud_type = 'usgov'
+    else:
+        raise ValueError('unknown sovereign cloud authority url: {}'.format(
+            auth_url))
+    return cloud_type
+
+
 def _aad_credentials(
         conf, service, default_endpoint=None, default_token_cache_file=None):
     # type: (dict, str) -> AADSettings
@@ -1374,7 +1397,9 @@ def _aad_credentials(
         )
         aad_authority_url = (
             _kv_read_checked(service_aad, 'authority_url') or
-            _kv_read_checked(super_aad, 'authority_url')
+            _kv_read_checked(
+                super_aad, 'authority_url',
+                default='https://login.microsoftonline.com')
         )
         aad_endpoint = _kv_read_checked(
             service_aad, 'endpoint', default=default_endpoint)

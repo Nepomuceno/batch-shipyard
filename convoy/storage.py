@@ -416,7 +416,7 @@ def add_resources_to_monitor(table_client, config, pools):
     bc = settings.credentials_batch(config)
     for poolid in pools:
         entity = {
-            'PartitionKey': 'pool',
+            'PartitionKey': 'BatchPool',
             'RowKey': '{}${}'.format(bc.account, poolid),
             'BatchServiceUrl': bc.account_service_url,
             'AadEndpoint': bc.aad.endpoint,
@@ -446,14 +446,16 @@ def remove_resources_from_monitoring(table_client, config, all, pools):
     if all:
         _clear_table(
             table_client, _STORAGE_CONTAINERS['table_monitoring'], config,
-            pool_id=None, pk='pool')
+            pool_id=None, pk='BatchPool')
         return
     bc = settings.credentials_batch(config)
     for poolid in pools:
         try:
             table_client.delete_entity(
-                _STORAGE_CONTAINERS['table_monitoring'], partition_key='pool',
-                row_key='{}${}'.format(bc.account, poolid))
+                _STORAGE_CONTAINERS['table_monitoring'],
+                partition_key='BatchPool',
+                row_key='{}${}'.format(bc.account, poolid)
+            )
         except azure.common.AzureMissingResourceHttpError:
             logger.error('pool {} is not monitored'.format(poolid))
         else:
@@ -722,7 +724,7 @@ def delete_storage_containers_nonbatch(blob_client, table_client, kind):
         pass
     else:
         logger.debug('deleting table: {}'.format(contname))
-        table_client.create_table(contname)
+        table_client.delete_table(contname)
 
 
 def delete_storage_containers_boot_diagnostics(

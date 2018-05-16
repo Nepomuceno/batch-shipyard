@@ -115,13 +115,17 @@ def _create_virtual_machine_extension(
     # construct vm extensions
     vm_ext_name = settings.generate_virtual_machine_extension_name(
         vm_resource, offset)
+    # try to get storage account resource group
+    ssel = settings.batch_shipyard_settings(config).storage_account_settings
+    rg = settings.credentials_storage(config, ssel).resource_group
     # construct bootstrap command
     cmd = './{bsf}{a}{s}{v}'.format(
         bsf=bootstrap_file[0],
         a=' -a {}'.format(settings.determine_cloud_type_from_aad(config)),
-        s=' -s {}:{}'.format(
+        s=' -s {}:{}:{}'.format(
             storage.get_storageaccount(),
-            storage.get_storage_table_monitoring()
+            storage.get_storage_table_monitoring(),
+            rg if util.is_not_empty(rg) else '',
         ),
         v=' -v {}'.format(__version__),
     )

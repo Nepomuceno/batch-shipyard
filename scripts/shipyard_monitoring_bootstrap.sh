@@ -11,7 +11,9 @@ DOCKER_CE_VERSION_DEBIAN=18.05.0
 # consts
 # TODO switch version back to stable
 DOCKER_CE_PACKAGE_DEBIAN="docker-ce=${DOCKER_CE_VERSION_DEBIAN}~ce~3-0~"
-SHIPYARD_CONF_FILE=/etc/batch-shipyard.json
+SHIPYARD_VAR_DIR=/var/batch-shipyard
+SHIPYARD_CONF_FILE=${SHIPYARD_VAR_DIR}/picket.json
+PROMETHEUS_VAR_DIR=${SHIPYARD_VAR_DIR}/prometheus
 
 log() {
     local level=$1
@@ -41,18 +43,14 @@ DISTRIB_RELEASE=${DISTRIB_RELEASE,,}
 
 # set distribution specific vars
 PACKAGER=
-USER_MOUNTPOINT=/mnt/resource
-SYSTEMD_PATH=/lib/systemd/system
 if [ "$DISTRIB_ID" == "ubuntu" ]; then
     PACKAGER=apt
-    USER_MOUNTPOINT=/mnt
 elif [ "$DISTRIB_ID" == "debian" ]; then
     PACKAGER=apt
 elif [[ $DISTRIB_ID == centos* ]] || [ "$DISTRIB_ID" == "rhel" ]; then
     PACKAGER=yum
 else
     PACKAGER=zypper
-    SYSTEMD_PATH=/usr/lib/systemd/system
 fi
 if [ "$PACKAGER" == "apt" ]; then
     export DEBIAN_FRONTEND=noninteractive
@@ -62,6 +60,7 @@ fi
 aad_cloud=
 storage_account=
 table_name=
+storage_rg=
 shipyardversion=
 
 # process command line options
@@ -71,7 +70,7 @@ while getopts "h?a:s:v:" opt; do
             echo "shipyard_monitoring_bootstrap.sh parameters"
             echo ""
             echo "-a [aad cloud type] AAD cloud type for MSI"
-            echo "-s [storage account:table name] monitoring table"
+            echo "-s [storage account:table name:resource group] monitoring table"
             echo "-v [version] batch-shipyard version"
             echo ""
             exit 1
@@ -83,6 +82,7 @@ while getopts "h?a:s:v:" opt; do
             IFS=':' read -ra ss <<< "${OPTARG,,}"
             storage_account=${ss[0]}
             table_name=${ss[1]}
+            storage_rg=${ss[2]}
             ;;
         v)
             shipyardversion=$OPTARG
@@ -197,7 +197,6 @@ install_packages() {
 install_docker_host_engine() {
     log DEBUG "Installing Docker Host Engine"
     # set vars
-    local srvstop="systemctl stop docker.service"
     if [ "$PACKAGER" == "apt" ]; then
         local repo=https://download.docker.com/linux/"${DISTRIB_ID}"
         local gpgkey="${repo}"/gpg
@@ -247,21 +246,75 @@ check_for_buggy_ntfs_mount
 # set sudoers to not require tty
 sed -i 's/^Defaults[ ]*requiretty/# Defaults requiretty/g' /etc/sudoers
 
+# create directories
+mkdir -p ${SHIPYARD_VAR_DIR}
+mkdir -p ${PROMETHEUS_VAR_DIR}
+
 # write shipyard config
-cat > $SHIPYARD_CONF_FILE << EOF
+chmod 755 ${SHIPYARD_VAR_DIR}
+cat > ${SHIPYARD_CONF_FILE} << EOF
 {
-    "aad_cloud": $aad_cloud,
+    "aad_cloud": "$aad_cloud",
     "storage": {
-        "account": $storage_account,
-        "table_name": $table_name,
-    }
+        "account": "$storage_account",
+        "table_name": "$table_name",
+        "resource_group": "$storage_rg"
+    },
+    "batch_shipyard_version": "$shipyardversion",
+    "prometheus_var_dir": "$PROMETHEUS_VAR_DIR"
 }
 EOF
 
 # install docker host engine
 install_docker_host_engine
 
-# TODO start docker image with auto restart (--rm -d --restart always -v $SHIPYARD_CONF_FILE:$SHIPYARD_CONF_FILE:ro)
-# TODO use docker compose instead with prometheus/grafana, requires systemd unit file
+# install dependencies for prometheus/grafana/nginx stack
+install_packages python3-pip apache2-utils
+
+# install docker-compose
+pip3 install --upgrade pip
+pip3 install --upgrade setuptools wheel
+pip3 install docker-compose
+
+# create systemd area for docker compose
+mkdir -p /etc/docker/compose/batch-shipyard-monitoring
+mv docker-compose.yml /etc/docker/compose/batch-shipyard-monitoring/
+
+# create systemd unit file
+cat << EOF > /etc/systemd/system/docker-compose@.service
+[Unit]
+Description=%i service with docker compose
+Requires=docker.service
+After=docker.service
+
+[Service]
+Restart=always
+
+WorkingDirectory=/etc/docker/compose/%i
+
+# Remove old containers, images and volumes
+ExecStartPre=/usr/local/bin/docker-compose down -v
+ExecStartPre=/usr/local/bin/docker-compose rm -fv
+ExecStartPre=-/bin/bash -c 'docker volume ls -qf "name=%i_" | xargs -r docker volume rm'
+ExecStartPre=-/bin/bash -c 'docker network ls -qf "name=%i_" | xargs -r docker network rm'
+ExecStartPre=-/bin/bash -c 'docker ps -aqf "name=%i_*" | xargs -r docker rm'
+
+# Compose up
+ExecStart=/usr/local/bin/docker-compose up
+
+# Compose down, remove containers and volumes
+ExecStop=/usr/local/bin/docker-compose down -v
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# TODO nginx/let's encrypt configuration
+
+# start and enable services
+systemctl daemon-reload
+systemctl start docker-compose@batch-shipyard-monitoring
+systemctl enable docker-compose@batch-shipyard-monitoring
+systemctl --no-pager status docker-compose@batch-shipyard-monitoring
 
 log INFO "Bootstrap completed"
